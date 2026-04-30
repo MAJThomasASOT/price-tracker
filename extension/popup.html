@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Price Tracker</title>
+    <style>
+      body {
+        width: 380px;
+        margin: 0;
+        padding: 16px;
+        font-family: Arial, sans-serif;
+        background: #f5f7fb;
+        color: #1f2937;
+      }
+
+      .card {
+        background: white;
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      }
+
+      h2 {
+        margin: 0 0 12px;
+        font-size: 20px;
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        margin: 12px 0 6px;
+        color: #374151;
+      }
+
+      input,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        font-size: 14px;
+      }
+
+      .checkbox-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 10px;
+        font-size: 13px;
+        color: #374151;
+      }
+
+      .checkbox-row input {
+        width: auto;
+        margin-top: 2px;
+      }
+
+      button {
+        width: 100%;
+        margin-top: 12px;
+        padding: 11px;
+        border: none;
+        border-radius: 10px;
+        background: #2563eb;
+        color: white;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .track-button {
+        background: #16a34a;
+      }
+
+      .result-box {
+        display: none;
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 12px;
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+      }
+
+      .small-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: #6b7280;
+        margin-top: 8px;
+      }
+
+      .value {
+        font-size: 14px;
+        margin-top: 3px;
+      }
+
+      #status {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #2563eb;
+        font-weight: 700;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 8px;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="card">
+      <h2>Price Tracker</h2>
+
+      <label>Email for alerts</label>
+      <input type="text" id="email" placeholder="you@example.com" />
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="notifyOnSale" checked />
+        <span>Notify me when this item goes on sale / drops in price</span>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="useTargetPrice" />
+        <span>Also notify me when it reaches a target price</span>
+      </div>
+
+      <label>Target price optional</label>
+      <input type="number" id="targetPrice" placeholder="Example: 400" disabled />
+
+      <button id="scanBtn">Scan Current Page</button>
+
+      <div id="scanResults" class="result-box">
+        <div class="small-title">Product</div>
+        <div id="productName" class="value"></div>
+
+        <div class="small-title">Stock status</div>
+        <div id="stockStatus" class="value"></div>
+
+        <label>Select correct current price</label>
+        <select id="priceSelect"></select>
+
+        <button id="trackBtn" class="track-button">Track This Item</button>
+      </div>
+
+      <p id="status"></p>
+
+      <div class="hint">
+        The tracker will save the selected price location and use confidence checks to avoid false alerts.
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
