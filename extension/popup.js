@@ -1,5 +1,3 @@
-const BACKEND_BASE_URL = "http://localhost:3001";
-
 let scannedData = null;
 
 document.getElementById("useTargetPrice").addEventListener("change", () => {

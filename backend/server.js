@@ -33,7 +33,7 @@ if (DATABASE_TYPE === "postgres") {
 
   console.log("Using PostgreSQL database.");
 } else {
-  db = new sqlite3.Database("./price-tracker.db");
+  db = new sqlite3.Database(process.env.SQLITE_PATH || "./price-tracker.db");
   console.log("Using SQLite database.");
 }
 function normaliseSql(sql) {

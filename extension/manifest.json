@@ -22,7 +22,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["tracked.html", "tracked.js"],
+      "resources": ["tracked.html", "tracked.js", "config.js"],
       "matches": ["<all_urls>"]
     }
   ]

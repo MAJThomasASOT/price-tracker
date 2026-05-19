@@ -4,3 +4,4 @@ price-tracker.db
 backend/.env
 backend/price-tracker.db
 backend/node_modules
+extension/config.js
