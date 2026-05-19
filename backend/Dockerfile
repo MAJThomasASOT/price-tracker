@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package*.json ./
 RUN npm ci --omit=dev
 
+# Rebuild sqlite3 from source inside the container so it links against
+# the correct glibc version rather than using a prebuilt binary from the host
+RUN npm rebuild sqlite3 --build-from-source
+
 COPY server.js ./
 
 # Persist the SQLite database file across container restarts
