@@ -73,6 +73,10 @@
         background: #16a34a;
       }
 
+      .view-items-button {
+        background: #6b7280;
+      }
+
       .result-box {
         display: none;
         margin-top: 14px;
@@ -107,6 +111,7 @@
         margin-top: 8px;
         line-height: 1.4;
       }
+
     </style>
   </head>
 
@@ -120,6 +125,11 @@
       <div class="checkbox-row">
         <input type="checkbox" id="notifyOnSale" checked />
         <span>Notify me when this item goes on sale / drops in price</span>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="notifyOnBackInStock" checked />
+        <span>Notify me when this item comes back in stock / becomes available</span>
       </div>
 
       <div class="checkbox-row">
@@ -139,6 +149,9 @@
         <div class="small-title">Stock status</div>
         <div id="stockStatus" class="value"></div>
 
+        <label>Custom display name</label>
+        <input type="text" id="customName" placeholder="e.g. Blue headphones" />
+
         <label>Select correct current price</label>
         <select id="priceSelect"></select>
 
@@ -150,6 +163,8 @@
       <div class="hint">
         The tracker will save the selected price location and use confidence checks to avoid false alerts.
       </div>
+
+      <button id="viewItemsBtn" class="view-items-button">View Tracked Items</button>
     </div>
 
     <script src="popup.js"></script>

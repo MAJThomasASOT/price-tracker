@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Generate Price Tracker Icons</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 30px; background: #f5f7fb; }
+    h2 { margin-bottom: 20px; }
+    .previews { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 24px; }
+    .preview { text-align: center; }
+    .preview p { font-size: 12px; color: #6b7280; margin-top: 6px; }
+    button {
+      padding: 12px 24px; background: #16a34a; color: white;
+      border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer;
+    }
+    button:hover { background: #15803d; }
+    .note { margin-top: 16px; font-size: 13px; color: #6b7280; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h2>Price Tracker — Icon Generator</h2>
+  <p>Click the button to download all 4 icon sizes. Save them into <code>extension/icons/</code>.</p>
+
+  <div class="previews" id="previews"></div>
+
+  <button onclick="downloadAll()">Download all icons</button>
+
+  <div class="note">
+    After downloading, place the files in <code>extension/icons/</code> and reload the extension in Chrome.
+  </div>
+
+  <script>
+    const sizes = [16, 32, 48, 128];
+
+    function drawIcon(size) {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+
+      // Background
+      const radius = size * 0.18;
+      ctx.beginPath();
+      ctx.moveTo(radius, 0);
+      ctx.lineTo(size - radius, 0);
+      ctx.quadraticCurveTo(size, 0, size, radius);
+      ctx.lineTo(size, size - radius);
+      ctx.quadraticCurveTo(size, size, size - radius, size);
+      ctx.lineTo(radius, size);
+      ctx.quadraticCurveTo(0, size, 0, size - radius);
+      ctx.lineTo(0, radius);
+      ctx.quadraticCurveTo(0, 0, radius, 0);
+      ctx.closePath();
+      ctx.fillStyle = "#16a34a";
+      ctx.fill();
+
+      // Text
+      const fontSize = Math.round(size * 0.44);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("PT", size / 2, size / 2 + size * 0.03);
+
+      return canvas;
+    }
+
+    // Show previews
+    sizes.forEach((size) => {
+      const canvas = drawIcon(size);
+      const wrapper = document.createElement("div");
+      wrapper.className = "preview";
+      wrapper.appendChild(canvas);
+      const label = document.createElement("p");
+      label.textContent = `${size}×${size}`;
+      wrapper.appendChild(label);
+      document.getElementById("previews").appendChild(wrapper);
+    });
+
+    function downloadAll() {
+      sizes.forEach((size) => {
+        const canvas = drawIcon(size);
+        const a = document.createElement("a");
+        a.download = `icon${size}.png`;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      });
+    }
+  </script>
+</body>
+</html>

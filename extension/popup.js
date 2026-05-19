@@ -1,3 +1,5 @@
+const BACKEND_BASE_URL = "http://localhost:3001";
+
 let scannedData = null;
 
 document.getElementById("useTargetPrice").addEventListener("change", () => {
@@ -101,6 +103,21 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         document.title ||
         "Unknown Product";
 
+      const ogImage = document.querySelector('meta[property="og:image"]')?.content || null;
+      const twitterImage = document.querySelector('meta[name="twitter:image"]')?.content || null;
+      let productImage = ogImage || twitterImage || null;
+
+      if (!productImage) {
+        const imgCandidates = Array.from(document.querySelectorAll("img")).filter((img) => {
+          const src = img.src || "";
+          const alt = (img.alt || "").toLowerCase();
+          const w = img.naturalWidth || img.width || 0;
+          const h = img.naturalHeight || img.height || 0;
+          return w >= 100 && h >= 100 && src && !src.includes("logo") && !src.includes("icon") && !src.includes("badge");
+        });
+        productImage = imgCandidates[0]?.src || null;
+      }
+
       const pageText = document.body.innerText.toLowerCase();
 
       let stockStatus = "unknown";
@@ -175,6 +192,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
       return {
         productName: title,
+        productImage,
         stockStatus,
         priceCandidates: filtered
       };
@@ -185,6 +203,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
   document.getElementById("productName").innerText = scannedData.productName;
   document.getElementById("stockStatus").innerText = scannedData.stockStatus;
+  document.getElementById("customName").value = scannedData.productName || "";
 
   const priceSelect = document.getElementById("priceSelect");
   priceSelect.innerHTML = "";
@@ -209,7 +228,9 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
 document.getElementById("trackBtn").addEventListener("click", async () => {
   const email = document.getElementById("email").value;
+  const customName = document.getElementById("customName").value.trim();
   const notifyOnSale = document.getElementById("notifyOnSale").checked;
+  const notifyOnBackInStock = document.getElementById("notifyOnBackInStock").checked;
   const useTargetPrice = document.getElementById("useTargetPrice").checked;
   const targetPrice = document.getElementById("targetPrice").value;
   const selectedIndex = document.getElementById("priceSelect").value;
@@ -220,7 +241,7 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
     return;
   }
 
-  if (!notifyOnSale && !useTargetPrice) {
+  if (!notifyOnSale && !useTargetPrice && !notifyOnBackInStock) {
     statusEl.innerText = "Select at least one alert option.";
     return;
   }
@@ -246,7 +267,7 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
   const url = tab.url;
 
   try {
-    const response = await fetch("http://localhost:3000/track", {
+    const response = await fetch(`${BACKEND_BASE_URL}/track`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -255,6 +276,13 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
         url,
         store: new URL(url).hostname,
         productName: scannedData.productName,
+        productImage: scannedData.productImage || null,
+        // Only store a custom name when the user actually typed something different
+        // from the auto-detected product name. Sending null preserves any existing
+        // custom_name on the backend for re-tracks.
+        customName: (customName && customName !== (scannedData.productName || "").trim())
+          ? customName
+          : null,
         currentPrice: selectedCandidate.price,
         targetPrice: useTargetPrice ? Number(targetPrice) : null,
         email,
@@ -264,7 +292,7 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
         priceContextText: selectedCandidate.contextText,
         notifyOnPriceDrop: notifyOnSale ? 1 : 0,
         notifyOnTargetPrice: useTargetPrice ? 1 : 0,
-        notifyOnBackInStock: 1,
+        notifyOnBackInStock: notifyOnBackInStock ? 1 : 0,
         notifyOnOutOfStock: 1,
         notifyOnPageRemoved: 1
       })
@@ -280,4 +308,8 @@ document.getElementById("trackBtn").addEventListener("click", async () => {
   } catch (error) {
     statusEl.innerText = "Failed to connect to backend.";
   }
+});
+
+document.getElementById("viewItemsBtn").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("tracked.html") });
 });

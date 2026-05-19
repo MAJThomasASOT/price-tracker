@@ -11,6 +11,13 @@ const { Resend } = require("resend");
 
 const app = express();
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 const PORT = process.env.PORT || 3001;
 const DATABASE_TYPE = process.env.DATABASE_TYPE || "sqlite";
@@ -98,8 +105,13 @@ async function initialiseDatabase() {
         last_confidence_score INTEGER DEFAULT 0,
         last_confidence_reason TEXT,
 
+        product_image TEXT,
+        custom_name TEXT,
+
         stock_status TEXT DEFAULT 'unknown',
         previous_stock_status TEXT DEFAULT 'unknown',
+        last_stock_confidence_score INTEGER DEFAULT 0,
+        last_stock_confidence_reason TEXT,
 
         page_status TEXT DEFAULT 'unknown',
         previous_page_status TEXT DEFAULT 'unknown',
@@ -110,11 +122,26 @@ async function initialiseDatabase() {
         notify_on_out_of_stock INTEGER DEFAULT 1,
         notify_on_page_removed INTEGER DEFAULT 1,
 
+        display_order INTEGER DEFAULT 0,
+        last_stock_manual_check INTEGER DEFAULT 0,
+
         status TEXT DEFAULT 'tracked',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_checked_at TIMESTAMP
       )
     `);
+
+    const pgMigrations = [
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS product_image TEXT",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS custom_name TEXT",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_confidence_score INTEGER DEFAULT 0",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_confidence_reason TEXT",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_manual_check INTEGER DEFAULT 0"
+    ];
+    for (const sql of pgMigrations) {
+      await dbRun(sql);
+    }
 
     return;
   }
@@ -135,8 +162,13 @@ async function initialiseDatabase() {
       last_confidence_score INTEGER DEFAULT 0,
       last_confidence_reason TEXT,
 
+      product_image TEXT,
+      custom_name TEXT,
+
       stock_status TEXT DEFAULT 'unknown',
       previous_stock_status TEXT DEFAULT 'unknown',
+      last_stock_confidence_score INTEGER DEFAULT 0,
+      last_stock_confidence_reason TEXT,
 
       page_status TEXT DEFAULT 'unknown',
       previous_page_status TEXT DEFAULT 'unknown',
@@ -147,11 +179,35 @@ async function initialiseDatabase() {
       notify_on_out_of_stock INTEGER DEFAULT 1,
       notify_on_page_removed INTEGER DEFAULT 1,
 
+      display_order INTEGER DEFAULT 0,
+      last_stock_manual_check INTEGER DEFAULT 0,
+
       status TEXT DEFAULT 'tracked',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       last_checked_at TEXT
     )
   `);
+
+  // Use PRAGMA to check which columns actually exist, then add any that are missing.
+  // This is more reliable than ALTER TABLE + .catch() because it logs what happened.
+  const existingColumns = await dbAll("PRAGMA table_info(tracked_items)");
+  const colNames = existingColumns.map(c => c.name);
+
+  const neededColumns = [
+    { name: "product_image",               def: "TEXT" },
+    { name: "custom_name",                 def: "TEXT" },
+    { name: "last_stock_confidence_score", def: "INTEGER DEFAULT 0" },
+    { name: "last_stock_confidence_reason",def: "TEXT" },
+    { name: "display_order",               def: "INTEGER DEFAULT 0" },
+    { name: "last_stock_manual_check",     def: "INTEGER DEFAULT 0" }
+  ];
+
+  for (const col of neededColumns) {
+    if (!colNames.includes(col.name)) {
+      await dbRun(`ALTER TABLE tracked_items ADD COLUMN ${col.name} ${col.def}`);
+      console.log(`[DB migration] Added missing column: ${col.name}`);
+    }
+  }
 }
 
 async function sendEmail(to, subject, body, htmlBody = null) {
@@ -202,84 +258,184 @@ function parsePrices(text) {
 function detectStockStatus(text) {
   const lower = text.toLowerCase();
 
-  const outOfStockSignals = [
-    "out of stock",
-    "sold out",
-    "currently unavailable",
-    "notify me when available",
-    "notify when available",
-    "email me when available",
-    "back in stock notification",
-    "temporarily unavailable",
-    "not available",
-    "no longer available",
-    "currently out of stock",
-    "this item is unavailable",
-    "cannot be added to cart",
-    "sold-out"
+  const strongOutSignals = [
+    { phrase: "out of stock", score: 5 },
+    { phrase: "out-of-stock", score: 5 },
+    { phrase: "sold out", score: 5 },
+    { phrase: "sold-out", score: 5 },
+    { phrase: "currently out of stock", score: 5 },
+    { phrase: "notify me when available", score: 5 },
+    { phrase: "notify me when back in stock", score: 5 },
+    { phrase: "email me when available", score: 5 },
+    { phrase: "back in stock notification", score: 5 }
   ];
 
-  const inStockSignals = [
-    "ready to ship",
-    "in stock",
-    "add to cart",
-    "add to basket",
-    "buy now",
-    "available now",
-    "available for delivery",
-    "available online",
-    "ships today",
-    "ships now",
-    "dispatches today",
-    "dispatches within",
-    "left in stock",
-    "low stock",
-    "limited stock"
+  const generalOutSignals = [
+    { phrase: "currently unavailable", score: 3 },
+    { phrase: "temporarily unavailable", score: 3 },
+    { phrase: "not available", score: 3 },
+    { phrase: "no longer available", score: 3 },
+    { phrase: "this item is unavailable", score: 3 },
+    { phrase: "item unavailable", score: 3 },
+    { phrase: "product unavailable", score: 3 },
+    { phrase: "unavailable online", score: 3 },
+    { phrase: "stock unavailable", score: 3 },
+    { phrase: "cannot be added to cart", score: 3 },
+    { phrase: "notify when available", score: 3 }
+  ];
+
+  // Only phrases that clearly mean "this specific item is available to buy"
+  const strongInSignals = [
+    { phrase: "in stock", score: 5 },
+    { phrase: "ready to ship", score: 5 }
+  ];
+
+  const generalInSignals = [
+    { phrase: "add to cart", score: 4 },
+    { phrase: "add to basket", score: 4 },
+    { phrase: "buy now", score: 4 },
+    { phrase: "available now", score: 3 },
+    { phrase: "available for delivery", score: 3 },
+    { phrase: "ships today", score: 3 },
+    { phrase: "ships now", score: 3 },
+    { phrase: "dispatches today", score: 3 },
+    { phrase: "dispatches within", score: 3 },
+    { phrase: "left in stock", score: 5 },
+    { phrase: "low stock", score: 3 },
+    { phrase: "limited stock", score: 3 }
+    // Note: "available online" and bare "availability" are intentionally excluded
+    // to avoid false positives from headings like "Stock availability" or
+    // "Warehouse availability: Call for stock availability".
   ];
 
   const preorderSignals = [
-    "pre-order",
-    "preorder",
-    "pre order",
-    "available for pre-order",
-    "available for preorder"
+    { phrase: "pre-order", score: 4 },
+    { phrase: "preorder", score: 4 },
+    { phrase: "pre order", score: 4 },
+    { phrase: "available for pre-order", score: 4 },
+    { phrase: "available for preorder", score: 4 }
+  ];
+
+  // Phrases that indicate unclear/contradictory availability requiring manual check
+  const contradictionSignals = [
+    "call for stock availability",
+    "call for availability",
+    "contact us for availability",
+    "contact store for availability",
+    "check store availability",
+    "check availability",
+    "warehouse availability",
+    "store availability",
+    "call to confirm availability",
+    "ring for availability",
+    "phone for availability"
   ];
 
   let outScore = 0;
   let inScore = 0;
   let preorderScore = 0;
+  const outOfStockSignalsFound = [];
+  const inStockSignalsFound = [];
+  const stockConflictReasons = [];
+  const reasons = [];
 
-  outOfStockSignals.forEach((signal) => {
-    if (lower.includes(signal)) outScore += 2;
-  });
-
-  inStockSignals.forEach((signal) => {
-    if (lower.includes(signal)) inScore += 2;
-  });
-
-  preorderSignals.forEach((signal) => {
-    if (lower.includes(signal)) preorderScore += 2;
-  });
-
-  if (/only\s+\d+\s+left/.test(lower)) inScore += 4;
-  if (/\d+\s+left\s+in\s+stock/.test(lower)) inScore += 4;
-  if (/add\s+to\s+cart/.test(lower)) inScore += 3;
-  if (/notify\s+me\s+when\s+(available|back\s+in\s+stock)/.test(lower)) outScore += 4;
-  if (/out\s+of\s+stock/.test(lower)) outScore += 5;
-
-  if (preorderScore > outScore && preorderScore >= inScore) {
-    return "preorder";
+  for (const { phrase, score } of strongOutSignals) {
+    if (lower.includes(phrase)) {
+      outScore += score;
+      outOfStockSignalsFound.push(phrase);
+    }
   }
 
-  if (outScore > inScore) {
-    return "out_of_stock";
+  for (const { phrase, score } of generalOutSignals) {
+    if (lower.includes(phrase)) {
+      outScore += score;
+      outOfStockSignalsFound.push(phrase);
+    }
   }
 
-  if (inScore > outScore) {
-    return "in_stock";
+  for (const { phrase, score } of strongInSignals) {
+    if (lower.includes(phrase)) {
+      inScore += score;
+      inStockSignalsFound.push(phrase);
+    }
   }
 
-  return "unknown";
+  for (const { phrase, score } of generalInSignals) {
+    if (lower.includes(phrase)) {
+      inScore += score;
+      inStockSignalsFound.push(phrase);
+    }
+  }
+
+  for (const { phrase, score } of preorderSignals) {
+    if (lower.includes(phrase)) {
+      preorderScore += score;
+    }
+  }
+
+  if (/only\s+\d+\s+left/.test(lower)) {
+    inScore += 5;
+    inStockSignalsFound.push("only X left");
+  }
+  if (/\d+\s+left\s+in\s+stock/.test(lower)) {
+    inScore += 5;
+    inStockSignalsFound.push("X left in stock");
+  }
+
+  // Detect contradiction/unclear signals
+  for (const phrase of contradictionSignals) {
+    if (lower.includes(phrase)) {
+      stockConflictReasons.push(`Unclear availability wording found: "${phrase}"`);
+    }
+  }
+
+  // Detect conflicting in-stock + out-of-stock signals on same page
+  if (inScore >= 3 && outScore >= 3) {
+    stockConflictReasons.push(
+      `Conflicting stock signals: in-stock (${inStockSignalsFound.join(", ")}) and out-of-stock (${outOfStockSignalsFound.join(", ")}) both detected.`
+    );
+  }
+
+  const stockConflictDetected = stockConflictReasons.length > 0;
+  const stockManualCheckRequired = stockConflictDetected;
+
+  let status;
+
+  if (stockManualCheckRequired) {
+    // Keep unknown when wording is contradictory — don't flip to in_stock
+    status = "unknown";
+    reasons.push("Manual check required: unclear or contradictory availability wording.");
+    stockConflictReasons.forEach((r) => reasons.push(r));
+  } else if (preorderScore > outScore && preorderScore >= inScore) {
+    status = "preorder";
+    reasons.push("Pre-order wording found.");
+  } else if (outScore > inScore) {
+    status = "out_of_stock";
+    if (outOfStockSignalsFound.length) {
+      reasons.push(`Out-of-stock wording found: ${outOfStockSignalsFound.join(", ")}.`);
+    }
+  } else if (inScore > outScore) {
+    status = "in_stock";
+    if (inStockSignalsFound.length) {
+      reasons.push(`Available wording found: ${inStockSignalsFound.join(", ")}.`);
+    }
+  } else {
+    status = "unknown";
+    reasons.push("No clear stock signals found.");
+  }
+
+  const confidenceScore = Math.max(outScore, inScore, preorderScore);
+
+  return {
+    status,
+    confidenceScore,
+    reasons,
+    outOfStockSignalsFound,
+    inStockSignalsFound,
+    stockConflictDetected,
+    stockManualCheckRequired,
+    stockConflictReasons
+  };
 }
 
 function findSaleIndicators(text) {
@@ -412,6 +568,7 @@ async function scanProductPage(item) {
         pageStatus: "not_found",
         currentPrice: null,
         stockStatus: "unknown",
+        stockResult: { status: "unknown", confidenceScore: 0, reasons: ["Page not found."], outOfStockSignalsFound: [], inStockSignalsFound: [] },
         productName: null,
         selectorWorked: false,
         selectorText: "",
@@ -424,6 +581,7 @@ async function scanProductPage(item) {
         pageStatus: "error",
         currentPrice: null,
         stockStatus: "unknown",
+        stockResult: { status: "unknown", confidenceScore: 0, reasons: ["Page returned an error."], outOfStockSignalsFound: [], inStockSignalsFound: [] },
         productName: null,
         selectorWorked: false,
         selectorText: "",
@@ -438,6 +596,11 @@ async function scanProductPage(item) {
       $("h1").first().text().trim() ||
       $('meta[property="og:title"]').attr("content") ||
       $("title").text().trim() ||
+      null;
+
+    const productImage =
+      $('meta[property="og:image"]').attr("content") ||
+      $('meta[name="twitter:image"]').attr("content") ||
       null;
 
     let selectorWorked = false;
@@ -471,11 +634,16 @@ async function scanProductPage(item) {
       bodyText
     );
 
+    const stockResult = detectStockStatus(bodyText);
+
     return {
       pageStatus: "active",
       currentPrice,
-      stockStatus: detectStockStatus(bodyText),
+      priceCandidates: allPrices,
+      stockStatus: stockResult.status,
+      stockResult,
       productName,
+      productImage,
       selectorWorked,
       selectorText,
       confidence
@@ -485,6 +653,7 @@ async function scanProductPage(item) {
       pageStatus: "error",
       currentPrice: null,
       stockStatus: "unknown",
+      stockResult: { status: "unknown", confidenceScore: 0, reasons: ["Request failed."], outOfStockSignalsFound: [], inStockSignalsFound: [] },
       productName: null,
       selectorWorked: false,
       selectorText: "",
@@ -522,7 +691,16 @@ function buildAlerts(item, newData) {
     item.stock_status !== "in_stock" &&
     newData.stockStatus === "in_stock"
   ) {
-    alerts.push("Item is back in stock.");
+    alerts.push("Item appears to be available again.");
+  }
+
+  if (
+    item.notify_on_back_in_stock &&
+    item.stock_status === "out_of_stock" &&
+    newData.stockStatus !== "in_stock" &&
+    (newData.stockResult?.outOfStockSignalsFound?.length ?? 0) === 0
+  ) {
+    alerts.push("Possible availability change detected. The previous out-of-stock wording is no longer visible. Please manually check the product page.");
   }
 
   if (
@@ -558,6 +736,15 @@ function buildAlerts(item, newData) {
     alerts.push(`Possible price drop detected, but confidence was low (${confidenceScore}/100). Please manually confirm the item.`);
   }
 
+  if (
+    item.notify_on_back_in_stock &&
+    newData.stockResult?.stockManualCheckRequired
+  ) {
+    const conflictReasons = newData.stockResult?.stockConflictReasons || [];
+    const reasonText = conflictReasons.length ? `\nReason: ${conflictReasons[0]}` : "";
+    alerts.push(`Manual check required: the tracker found conflicting or unclear stock availability wording. Please check the product page directly.${reasonText}`);
+  }
+
   return alerts;
 }
 
@@ -565,6 +752,7 @@ async function checkOneItem(item) {
   const newData = await scanProductPage(item);
   const alerts = buildAlerts(item, newData);
   const updatedProductName = newData.productName || item.product_name;
+  const displayName = item.custom_name || updatedProductName || item.url;
 
   await dbRun(
     `
@@ -575,6 +763,9 @@ async function checkOneItem(item) {
       current_price = ?,
       previous_stock_status = stock_status,
       stock_status = ?,
+      last_stock_confidence_score = ?,
+      last_stock_confidence_reason = ?,
+      last_stock_manual_check = ?,
       previous_page_status = page_status,
       page_status = ?,
       last_confidence_score = ?,
@@ -586,6 +777,9 @@ async function checkOneItem(item) {
       updatedProductName,
       newData.currentPrice,
       newData.stockStatus,
+      newData.stockResult?.confidenceScore ?? 0,
+      JSON.stringify(newData.stockResult?.reasons || []),
+      newData.stockResult?.stockManualCheckRequired ? 1 : 0,
       newData.pageStatus,
       newData.confidence?.score ?? 0,
       JSON.stringify(newData.confidence?.reasons || []),
@@ -594,10 +788,10 @@ async function checkOneItem(item) {
   );
 
   if (alerts.length > 0) {
-    const subject = `Price Tracker Alert: ${updatedProductName || item.url}`;
+    const subject = `Price Tracker Alert: ${displayName}`;
 
     const plainTextBody = `
-${updatedProductName || "Tracked item"}
+${displayName}
 
 Alerts:
 ${alerts.join("\n")}
@@ -620,7 +814,7 @@ ${item.url}
 <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; background: #f5f7fb; padding: 24px;">
   <div style="background: #ffffff; border-radius: 14px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.08);">
     <h2 style="margin-top: 0; color: #111827;">Price Tracker Alert</h2>
-    <h3 style="color: #1f2937;">${updatedProductName || "Tracked item"}</h3>
+    <h3 style="color: #1f2937;">${displayName}</h3>
 
     <div style="background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; margin: 18px 0;">
       <strong>Alert:</strong>
@@ -682,6 +876,7 @@ app.post("/track", async (req, res) => {
     url,
     store,
     productName,
+    productImage,
     currentPrice,
     targetPrice,
     email,
@@ -695,6 +890,18 @@ app.post("/track", async (req, res) => {
     notifyOnOutOfStock,
     notifyOnPageRemoved
   } = req.body;
+
+  // Accept several possible field names so popup and import form can't get out of sync
+  const customName = (
+    req.body.customName ??
+    req.body.custom_name ??
+    req.body.customDisplayName ??
+    req.body.displayName ??
+    null
+  );
+  const customNameTrimmed = customName?.trim() || null;
+
+  console.log(`[POST /track] url=${url?.slice(0, 60)} | customName=${customNameTrimmed} | productName=${productName?.slice(0, 40)}`);
 
   if (!url || !email) {
     return res.status(400).json({
@@ -716,6 +923,8 @@ app.post("/track", async (req, res) => {
         SET
           store = ?,
           product_name = ?,
+          product_image = ?,
+          custom_name = ?,
           previous_price = current_price,
           current_price = ?,
           target_price = ?,
@@ -737,6 +946,8 @@ app.post("/track", async (req, res) => {
         [
           store || existingItem.store,
           productName || existingItem.product_name,
+          productImage || existingItem.product_image,
+          customNameTrimmed !== null ? customNameTrimmed : (existingItem.custom_name || null),
           currentPrice ?? existingItem.current_price,
           targetPrice ?? existingItem.target_price,
           stockStatus || existingItem.stock_status,
@@ -769,6 +980,8 @@ app.post("/track", async (req, res) => {
           url,
           store,
           product_name,
+          product_image,
+          custom_name,
           current_price,
           previous_price,
           target_price,
@@ -785,13 +998,15 @@ app.post("/track", async (req, res) => {
           notify_on_out_of_stock,
           notify_on_page_removed
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id
         `,
         [
           url,
           store || null,
           productName || null,
+          productImage || null,
+          customNameTrimmed,
           currentPrice ?? null,
           null,
           targetPrice ?? null,
@@ -819,6 +1034,8 @@ app.post("/track", async (req, res) => {
           url,
           store,
           product_name,
+          product_image,
+          custom_name,
           current_price,
           previous_price,
           target_price,
@@ -835,12 +1052,14 @@ app.post("/track", async (req, res) => {
           notify_on_out_of_stock,
           notify_on_page_removed
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           url,
           store || null,
           productName || null,
+          productImage || null,
+          customNameTrimmed,
           currentPrice ?? null,
           null,
           targetPrice ?? null,
@@ -896,7 +1115,11 @@ app.delete("/items/:id", async (req, res) => {
 
 app.get("/items", async (req, res) => {
   try {
-    const rows = await dbAll("SELECT * FROM tracked_items ORDER BY created_at DESC");
+    const rows = await dbAll("SELECT * FROM tracked_items ORDER BY display_order ASC, created_at DESC");
+    if (rows.length > 0) {
+      const s = rows[0];
+      console.log(`[GET /items] ${rows.length} items. First: id=${s.id} | product_name=${String(s.product_name || "").slice(0, 40)} | custom_name=${s.custom_name}`);
+    }
     res.json(rows);
   } catch (error) {
     res.status(500).json({
@@ -904,6 +1127,65 @@ app.get("/items", async (req, res) => {
       message: "Failed to load tracked items.",
       error: error.message
     });
+  }
+});
+
+app.post("/scan-url", async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ success: false, message: "url is required." });
+  }
+
+  try {
+    const tempItem = {
+      url,
+      current_price: null,
+      target_price: null,
+      price_selector: null,
+      price_context_text: null
+    };
+
+    const result = await scanProductPage(tempItem);
+
+    res.json({
+      success: true,
+      url,
+      productName: result.productName,
+      productImage: result.productImage || null,
+      currentPrice: result.currentPrice,
+      priceCandidates: result.priceCandidates || [],
+      stockStatus: result.stockStatus,
+      stockConfidenceScore: result.stockResult?.confidenceScore ?? 0,
+      stockConfidenceReason: (result.stockResult?.reasons || []).join(" "),
+      stockManualCheckRequired: result.stockResult?.stockManualCheckRequired ?? false,
+      pageStatus: result.pageStatus,
+      priceSelector: result.selectorWorked ? result.selectorText : null,
+      priceContextText: result.selectorText || null
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to scan URL.",
+      error: error.message
+    });
+  }
+});
+
+app.post("/items/reorder", async (req, res) => {
+  const { orderedIds } = req.body;
+
+  if (!Array.isArray(orderedIds)) {
+    return res.status(400).json({ success: false, message: "orderedIds must be an array." });
+  }
+
+  try {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await dbRun("UPDATE tracked_items SET display_order = ? WHERE id = ?", [i, orderedIds[i]]);
+    }
+    res.json({ success: true, message: "Order saved." });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to save order.", error: error.message });
   }
 });
 
@@ -918,12 +1200,14 @@ app.post("/test-email/:id", async (req, res) => {
       });
     }
 
-    const subject = `Test Price Tracker Alert: ${item.product_name || item.url}`;
+    const testDisplayName = item.custom_name || item.product_name || item.url;
+
+    const subject = `Test Price Tracker Alert: ${testDisplayName}`;
 
     const plainTextBody = `
 TEST ALERT
 
-${item.product_name || "Tracked item"}
+${testDisplayName}
 
 This is a test email to confirm your alert layout is working.
 
@@ -940,7 +1224,7 @@ ${item.url}
 <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; background: #f5f7fb; padding: 24px;">
   <div style="background: #ffffff; border-radius: 14px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.08);">
     <h2 style="margin-top: 0; color: #111827;">Test Price Tracker Alert</h2>
-    <h3 style="color: #1f2937;">${item.product_name || "Tracked item"}</h3>
+    <h3 style="color: #1f2937;">${testDisplayName}</h3>
 
     <div style="background: #ecfdf5; border-left: 4px solid #16a34a; padding: 12px 16px; margin: 18px 0;">
       <strong>This is a test email.</strong>
