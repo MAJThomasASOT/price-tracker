@@ -483,7 +483,7 @@ async function scanUrl() {
     const data = await res.json();
 
     if (!data.success) {
-      setImportStatus("Could not scan this URL. Please check the link or try again.", "error");
+      setImportStatus(data.message || "Could not scan this URL. Please check the link or try again.", "error");
       return;
     }
 
@@ -501,8 +501,8 @@ async function scanUrl() {
     // Wire save button
     document.getElementById("reviewSaveBtn").addEventListener("click", saveImport);
 
-  } catch {
-    setImportStatus("Could not scan this URL. Please check the link or try again.", "error");
+  } catch (err) {
+    setImportStatus(`Could not reach the backend: ${err.message}`, "error");
   } finally {
     btn.disabled = false;
     btn.textContent = "Scan / Import Item";

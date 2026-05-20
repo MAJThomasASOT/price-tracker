@@ -1162,6 +1162,8 @@ app.post("/scan-url", async (req, res) => {
     return res.status(400).json({ success: false, message: "url is required." });
   }
 
+  console.log(`[scan-url] Scanning: ${url}`);
+
   try {
     const tempItem = {
       url,
@@ -1172,6 +1174,22 @@ app.post("/scan-url", async (req, res) => {
     };
 
     const result = await scanProductPage(tempItem);
+
+    console.log(`[scan-url] Done — pageStatus=${result.pageStatus} price=${result.currentPrice} stock=${result.stockStatus}`);
+
+    if (result.pageStatus === "not_found") {
+      return res.status(200).json({
+        success: false,
+        message: "Page not found (404). Check that the URL is correct and the product page still exists."
+      });
+    }
+
+    if (result.pageStatus === "error") {
+      return res.status(200).json({
+        success: false,
+        message: "The website returned an error. It may be blocking automated requests, or the URL may be invalid."
+      });
+    }
 
     res.json({
       success: true,
@@ -1189,10 +1207,10 @@ app.post("/scan-url", async (req, res) => {
       priceContextText: result.selectorText || null
     });
   } catch (error) {
+    console.error(`[scan-url] Error scanning ${url}:`, error.message);
     res.status(500).json({
       success: false,
-      message: "Failed to scan URL.",
-      error: error.message
+      message: `Scan failed: ${error.message}`
     });
   }
 });
