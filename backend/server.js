@@ -124,6 +124,7 @@ async function initialiseDatabase() {
 
         display_order INTEGER DEFAULT 0,
         last_stock_manual_check INTEGER DEFAULT 0,
+        last_alert_sent TEXT,
 
         status TEXT DEFAULT 'tracked',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -137,7 +138,8 @@ async function initialiseDatabase() {
       "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_confidence_score INTEGER DEFAULT 0",
       "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_confidence_reason TEXT",
       "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0",
-      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_manual_check INTEGER DEFAULT 0"
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_stock_manual_check INTEGER DEFAULT 0",
+      "ALTER TABLE tracked_items ADD COLUMN IF NOT EXISTS last_alert_sent TEXT"
     ];
     for (const sql of pgMigrations) {
       await dbRun(sql);
@@ -181,6 +183,7 @@ async function initialiseDatabase() {
 
       display_order INTEGER DEFAULT 0,
       last_stock_manual_check INTEGER DEFAULT 0,
+      last_alert_sent TEXT,
 
       status TEXT DEFAULT 'tracked',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -199,7 +202,8 @@ async function initialiseDatabase() {
     { name: "last_stock_confidence_score", def: "INTEGER DEFAULT 0" },
     { name: "last_stock_confidence_reason",def: "TEXT" },
     { name: "display_order",               def: "INTEGER DEFAULT 0" },
-    { name: "last_stock_manual_check",     def: "INTEGER DEFAULT 0" }
+    { name: "last_stock_manual_check",     def: "INTEGER DEFAULT 0" },
+    { name: "last_alert_sent",             def: "TEXT" }
   ];
 
   for (const col of neededColumns) {
@@ -396,7 +400,16 @@ function detectStockStatus(text) {
     );
   }
 
-  const stockConflictDetected = stockConflictReasons.length > 0;
+  // Strong in-stock evidence (e.g. "2 in stock" + "add to cart") overrides
+  // contradiction signals. Pages with a "Stock Availability" heading and a
+  // numeric count or "add to cart" button are clearly available — the
+  // contradictory phrase is likely from a different section of the page.
+  const strongInStockConfirmed =
+    inStockSignalsFound.some(s => s.includes("left in stock") || s.includes("only X")) ||
+    (inStockSignalsFound.includes("in stock") && inStockSignalsFound.includes("add to cart")) ||
+    inScore >= 8;
+
+  const stockConflictDetected = stockConflictReasons.length > 0 && !strongInStockConfirmed;
   const stockManualCheckRequired = stockConflictDetected;
 
   let status;
@@ -787,7 +800,19 @@ async function checkOneItem(item) {
     ]
   );
 
-  if (alerts.length > 0) {
+  // Only send email if alerts changed since last send.
+  // This prevents repeated emails when nothing on the page has changed.
+  const alertsJson = JSON.stringify(alerts);
+  const lastAlertSent = item.last_alert_sent || "[]";
+  const alertsChanged = alertsJson !== lastAlertSent;
+
+  // Always persist the current alert state so the next check can compare
+  await dbRun(
+    "UPDATE tracked_items SET last_alert_sent = ? WHERE id = ?",
+    [alerts.length > 0 ? alertsJson : "[]", item.id]
+  );
+
+  if (alerts.length > 0 && alertsChanged) {
     const subject = `Price Tracker Alert: ${displayName}`;
 
     const plainTextBody = `
