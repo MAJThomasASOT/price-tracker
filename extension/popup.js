@@ -44,7 +44,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
           .replace(/secure payment methods/gi, "").trim().slice(0, 90);
       }
 
-      // --- 1. JSON-LD structured data: most reliable source of the real price ---
+      // --- 1. JSON-LD structured data: most reliable source of the real current price ---
       let jsonLdPrice = null;
       for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
         try {
@@ -65,31 +65,13 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         if (jsonLdPrice != null) break;
       }
 
-      // --- 2. Product zone: lowest common ancestor of h1 and add-to-cart button ---
-      function findProductZone() {
-        const h1 = document.querySelector("h1");
-        let addToCart = null;
-        for (const btn of document.querySelectorAll("button, input[type='submit'], a")) {
-          const t = (btn.textContent || btn.value || "").toLowerCase().trim();
-          if (t === "add to cart" || t === "add to bag" || t === "buy now" || t === "add to basket") {
-            addToCart = btn; break;
-          }
-        }
-        if (!h1) return document.body;
-        if (!addToCart) {
-          let el = h1;
-          for (let i = 0; i < 6 && el.parentElement && el.parentElement !== document.body; i++)
-            el = el.parentElement;
-          return el;
-        }
-        const ancestors = new Set();
-        let el = h1;
-        while (el) { ancestors.add(el); el = el.parentElement; }
-        el = addToCart;
-        while (el) { if (ancestors.has(el)) return el; el = el.parentElement; }
-        return document.body;
-      }
-      const productZone = findProductZone();
+      // --- 2. Visual proximity to the product h1 ---
+      // The product's own price is always physically close to its title on the page.
+      // Related/recommended product prices are much further down.
+      const h1El = document.querySelector("h1");
+      const h1AbsTop = h1El
+        ? (h1El.getBoundingClientRect().top + window.scrollY)
+        : null;
 
       // --- 3. Scoring ---
       function candidateScore(el, text, price, priceMatch) {
@@ -97,31 +79,38 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         const classId = `${el.className || ""} ${el.id || ""}`.toLowerCase();
         let score = 0;
 
-        // Zone membership is the strongest signal
-        const inZone = productZone !== document.body && productZone.contains(el);
-        if (inZone) score += 80; else score -= 50;
+        // Visual proximity to h1: strongest signal (works regardless of DOM structure)
+        if (h1AbsTop != null) {
+          try {
+            const elTop = el.getBoundingClientRect().top + window.scrollY;
+            const dist = Math.abs(elTop - h1AbsTop);
+            if (dist < 200)       score += 80;
+            else if (dist < 500)  score += 50;
+            else if (dist < 1000) score += 20;
+            else if (dist > 2000) score -= 60;
+            else                  score -= 20;
+          } catch(e) {}
+        }
 
-        // JSON-LD match: near-definitive
+        // JSON-LD price match: near-definitive that this is the actual offer price
         if (jsonLdPrice != null && Math.abs(price - jsonLdPrice) < 0.015) score += 100;
 
+        // Class/id signals
         if (classId.includes("price")) score += 40;
         if (classId.includes("sale")) score += 30;
         if (classId.includes("special")) score += 25;
-        if (classId.includes("product")) score += 10;
         if (classId.includes("was") || classId.includes("old") ||
             classId.includes("original") || classId.includes("rrp")) score -= 40;
         if (classId.includes("now") || classId.includes("current") ||
             classId.includes("discounted")) score += 30;
 
-        // "was" = old price: penalise; "now" = current price: boost
+        // "was" = the old crossed-out price: penalise
         if (lower.includes("was")) score -= 30;
-        if (lower.includes("now")) score += 25;
+        if (lower.includes("now")) score += 20;
         if (lower.includes("rrp") || lower.includes("r.r.p")) score -= 30;
         if (lower.includes("don't pay")) score -= 20;
-        if (lower.includes("off")) score += 10;
-        if (lower.includes("sale")) score += 15;
         if (lower.includes("save")) score += 10;
-        if (lower.includes("special")) score += 15;
+        if (lower.includes("sale") || lower.includes("special")) score += 15;
 
         // Fine-grained: does THIS specific price appear right after "was" or "now"?
         const ep = priceMatch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
