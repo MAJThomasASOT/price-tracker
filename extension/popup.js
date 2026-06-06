@@ -192,20 +192,22 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
 
           // If this price appears after "now" (own text or nearby sibling),
           // look for a corresponding "WAS $X" in the same area and combine them
-          // into a single informative context string.
+          // into a single informative label.
           const ep = match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const nowRx = new RegExp(`\\bnow[\\s:]*${ep}`, "i");
           const isNowPrice = nowRx.test(text) || nowRx.test(nearbyText);
           let contextText = cleanContext(text);
+          let wasNowLabel = null;
           if (isNowPrice) {
             const wasMatch = nearbyText.match(/\bwas\s*(\$[0-9,]+(?:\.[0-9]{2})?)/i);
-            if (wasMatch) contextText = `WAS ${wasMatch[1]} → NOW`;
+            if (wasMatch) wasNowLabel = `WAS ${wasMatch[1]} - NOW ${match}`;
           }
 
           candidates.push({
             price, display: match,
             selector: getCssPath(el),
             contextText,
+            wasNowLabel,
             score: candidateScore(el, text, price, match, nearbyText)
           });
         }
@@ -244,7 +246,9 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
     scannedData.priceCandidates.forEach((candidate, index) => {
       const option = document.createElement("option");
       option.value = index;
-      option.textContent = `$${candidate.price.toFixed(2)} - ${candidate.contextText || "price detected"}`;
+      option.textContent = candidate.wasNowLabel
+        ? candidate.wasNowLabel
+        : `$${candidate.price.toFixed(2)} - ${candidate.contextText || "price detected"}`;
       priceSelect.appendChild(option);
     });
   }
