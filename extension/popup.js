@@ -66,7 +66,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
           .slice(0, 90);
       }
 
-      function candidateScore(el, text, price) {
+      function candidateScore(el, text, price, priceMatch) {
         const lower = text.toLowerCase();
         const classId = `${el.className || ""} ${el.id || ""}`.toLowerCase();
 
@@ -76,14 +76,25 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         if (classId.includes("sale")) score += 30;
         if (classId.includes("special")) score += 25;
         if (classId.includes("product")) score += 10;
+        // Penalise elements whose class/id explicitly marks them as the old price
+        if (classId.includes("was") || classId.includes("old") || classId.includes("original") || classId.includes("rrp")) score -= 40;
+        if (classId.includes("now") || classId.includes("current") || classId.includes("discounted")) score += 30;
 
-        if (lower.includes("don't pay")) score += 15;
-        if (lower.includes("was")) score += 15;
-        if (lower.includes("now")) score += 20;
+        if (lower.includes("don't pay")) score -= 20;
+        // "was" in context means this is the crossed-out old price — penalise it
+        if (lower.includes("was")) score -= 30;
+        if (lower.includes("now")) score += 25;
         if (lower.includes("off")) score += 20;
         if (lower.includes("sale")) score += 25;
         if (lower.includes("special")) score += 20;
         if (lower.includes("vip")) score += 10;
+        if (lower.includes("rrp") || lower.includes("r.r.p")) score -= 30;
+        if (lower.includes("save")) score += 10;
+
+        // Fine-grained: check if this specific price value appears right after "was" or "now" in the text
+        const escapedPrice = priceMatch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        if (new RegExp(`\\bwas[\\s:]*${escapedPrice}`, "i").test(text)) score -= 60;
+        if (new RegExp(`\\bnow[\\s:]*${escapedPrice}`, "i").test(text)) score += 60;
 
         if (text.length < 30) score += 15;
         if (text.length > 120) score -= 30;
@@ -161,7 +172,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
           if (!price || price <= 0) return;
 
           const context = cleanContext(text);
-          const score = candidateScore(el, text, price);
+          const score = candidateScore(el, text, price, match);
 
           candidates.push({
             price,
