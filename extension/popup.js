@@ -74,53 +74,60 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         : null;
 
       // --- 3. Scoring ---
-      function candidateScore(el, text, price, priceMatch) {
+      function candidateScore(el, text, price, priceMatch, nearbyText) {
         const lower = text.toLowerCase();
         const classId = `${el.className || ""} ${el.id || ""}`.toLowerCase();
         let score = 0;
 
-        // Visual proximity to h1: strongest signal (works regardless of DOM structure)
+        // Visual proximity to h1 — strongest discriminator between this product's
+        // prices and prices of unrelated products elsewhere on the page.
         if (h1AbsTop != null) {
           try {
             const elTop = el.getBoundingClientRect().top + window.scrollY;
             const dist = Math.abs(elTop - h1AbsTop);
-            if (dist < 200)       score += 80;
-            else if (dist < 500)  score += 50;
-            else if (dist < 1000) score += 20;
-            else if (dist > 2000) score -= 60;
-            else                  score -= 20;
+            if (dist < 200)        score += 80;
+            else if (dist < 500)   score += 50;
+            else if (dist < 800)   score += 10;
+            else if (dist < 1200)  score -= 110;
+            else                   score -= 220;
           } catch(e) {}
         }
 
-        // JSON-LD price match: near-definitive that this is the actual offer price
+        // JSON-LD offer price: near-definitive
         if (jsonLdPrice != null && Math.abs(price - jsonLdPrice) < 0.015) score += 100;
 
         // Class/id signals
         if (classId.includes("price")) score += 40;
         if (classId.includes("sale")) score += 30;
-        if (classId.includes("special")) score += 25;
-        if (classId.includes("was") || classId.includes("old") ||
-            classId.includes("original") || classId.includes("rrp")) score -= 40;
-        if (classId.includes("now") || classId.includes("current") ||
-            classId.includes("discounted")) score += 30;
+        if (classId.includes("special")) score += 20;
+        // Mild class penalty for "was/old" — we still WANT the was-price to appear,
+        // just ranked below the now-price
+        if (classId.includes("was") || classId.includes("old") || classId.includes("original")) score -= 15;
+        if (classId.includes("rrp")) score -= 30;
+        if (classId.includes("now") || classId.includes("current") || classId.includes("discounted")) score += 30;
 
-        // "was" = the old crossed-out price: penalise
-        if (lower.includes("was")) score -= 30;
+        // Small text context adjustments — keep "was" penalty light so it still shows
+        if (lower.includes("was")) score -= 10;
         if (lower.includes("now")) score += 20;
         if (lower.includes("rrp") || lower.includes("r.r.p")) score -= 30;
         if (lower.includes("don't pay")) score -= 20;
         if (lower.includes("save")) score += 10;
         if (lower.includes("sale") || lower.includes("special")) score += 15;
 
-        // Fine-grained: does THIS specific price appear right after "was" or "now"?
+        // Fine-grained: check if THIS specific price sits right after "was" or "now".
+        // Also check nearbyText (parent/grandparent innerText) to catch sites that put
+        // the "NOW" label and the price value in separate sibling elements.
         const ep = priceMatch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        if (new RegExp(`\\bwas[\\s:]*${ep}`, "i").test(text)) score -= 60;
-        if (new RegExp(`\\bnow[\\s:]*${ep}`, "i").test(text)) score += 60;
+        const nearby = nearbyText || "";
+        const wasRx = new RegExp(`\\bwas[\\s:]*${ep}`, "i");
+        const nowRx = new RegExp(`\\bnow[\\s:]*${ep}`, "i");
+        if (wasRx.test(text) || wasRx.test(nearby)) score -= 30;
+        if (nowRx.test(text) || nowRx.test(nearby)) score += 60;
 
         if (text.length < 30) score += 15;
         if (text.length > 120) score -= 30;
         if (lower.includes("afterpay")) score -= 35;
-        if (lower.includes("payments of")) score -= 35;
+        if (lower.includes("payments of")) score -= 120; // installment amounts
         if (lower.includes("shipping")) score -= 40;
         if (price < 20) score -= 25;
 
@@ -169,6 +176,14 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         const text = ownText || el.innerText?.trim();
         if (!text || text.length > 180) continue;
 
+        // Collect parent/grandparent text so we can detect "NOW" or "WAS" labels
+        // that appear in sibling elements rather than the same element as the price.
+        // e.g. site shows "NOW" on its own line then "$1,263.41" on the next line.
+        const nearbyText = [
+          el.parentElement?.innerText,
+          el.parentElement?.parentElement?.innerText
+        ].filter(Boolean).join(" ").slice(0, 400);
+
         for (const match of (text.match(/\$[0-9,]+(?:\.[0-9]{2})?/g) || [])) {
           const price = Number(match.replace("$", "").replace(/,/g, ""));
           if (!price || price <= 0) continue;
@@ -176,7 +191,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
             price, display: match,
             selector: getCssPath(el),
             contextText: cleanContext(text),
-            score: candidateScore(el, text, price, match)
+            score: candidateScore(el, text, price, match, nearbyText)
           });
         }
       }
@@ -188,6 +203,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
       }
 
       const filtered = Array.from(bestByPrice.values())
+        .filter(c => c.score >= 40)
         .sort((a, b) => b.score - a.score || b.price - a.price)
         .slice(0, 8);
 
