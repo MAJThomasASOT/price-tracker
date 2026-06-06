@@ -199,7 +199,7 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
           let contextText = cleanContext(text);
           if (isNowPrice) {
             const wasMatch = nearbyText.match(/\bwas\s*(\$[0-9,]+(?:\.[0-9]{2})?)/i);
-            if (wasMatch) contextText = `WAS ${wasMatch[1]} / NOW ${match}`;
+            if (wasMatch) contextText = `WAS ${wasMatch[1]} → NOW`;
           }
 
           candidates.push({
