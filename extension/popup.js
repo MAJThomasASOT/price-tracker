@@ -127,8 +127,10 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         if (text.length < 30) score += 15;
         if (text.length > 120) score -= 30;
         if (lower.includes("afterpay")) score -= 35;
-        if (lower.includes("payments of")) score -= 120; // installment amounts
-        if (lower.includes("shipping")) score -= 40;
+        if (lower.includes("payments of")) score -= 120;
+        if (lower.includes("free shipping") || lower.includes("shipping over") ||
+            lower.includes("shipping on")) score -= 150;
+        else if (lower.includes("shipping")) score -= 60;
         if (price < 20) score -= 25;
 
         return score;
@@ -187,10 +189,23 @@ document.getElementById("scanBtn").addEventListener("click", async () => {
         for (const match of (text.match(/\$[0-9,]+(?:\.[0-9]{2})?/g) || [])) {
           const price = Number(match.replace("$", "").replace(/,/g, ""));
           if (!price || price <= 0) continue;
+
+          // If this price appears after "now" (own text or nearby sibling),
+          // look for a corresponding "WAS $X" in the same area and combine them
+          // into a single informative context string.
+          const ep = match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const nowRx = new RegExp(`\\bnow[\\s:]*${ep}`, "i");
+          const isNowPrice = nowRx.test(text) || nowRx.test(nearbyText);
+          let contextText = cleanContext(text);
+          if (isNowPrice) {
+            const wasMatch = nearbyText.match(/\bwas\s*(\$[0-9,]+(?:\.[0-9]{2})?)/i);
+            if (wasMatch) contextText = `WAS ${wasMatch[1]} / NOW ${match}`;
+          }
+
           candidates.push({
             price, display: match,
             selector: getCssPath(el),
-            contextText: cleanContext(text),
+            contextText,
             score: candidateScore(el, text, price, match, nearbyText)
           });
         }
